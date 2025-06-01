@@ -1,281 +1,213 @@
-const {
-  Client,
-  GatewayIntentBits,
-  Partials,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  Events,
-  EmbedBuilder,
+const { 
+  Client, 
+  GatewayIntentBits, 
+  Partials, 
+  ActionRowBuilder, 
+  ButtonBuilder, 
+  ButtonStyle, 
+  Events, 
+  EmbedBuilder 
 } = require("discord.js");
 
-const config = require("./config.json");
-
-const MORPION_CHANNEL_ID = config.morpionChannelId;
+const MORPION_CHANNEL_ID = "1378737038261620806";
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
-  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+  partials: [Partials.Channel],
 });
 
-const morpionParties = new Map();
+// --- Variables morpion ---
+const games = new Map(); // channelId -> game state
 
-function afficherGrille(board) {
-  return board
-    .map(c => c === "X" ? "❌" : c === "O" ? "⭕" : "➖")
-    .join("")
-    .match(/.{1,3}/g)
-    .map(row => row.split("").join(" "))
-    .join("\n");
+// Game state example:
+// {
+//   board: Array(9).fill(null), // 3x3 grid flattened
+//   players: [userId1, userId2],
+//   turn: 0, // index 0 or 1 for players
+//   messageId: "discordMessageId",
+// }
+
+// Fonction pour dessiner le morpion en emojis
+function renderBoard(board) {
+  const symbols = { null: "⬜", X: "❌", O: "⭕" };
+  let str = "";
+  for (let i = 0; i < 9; i++) {
+    str += symbols[board[i]];
+    if ((i + 1) % 3 === 0) str += "\n";
+  }
+  return str;
 }
 
-function checkWin(board, sym) {
-  const lines = [
-    [0,1,2],[3,4,5],[6,7,8],
-    [0,3,6],[1,4,7],[2,5,8],
-    [0,4,8],[2,4,6],
+// Vérifie si quelqu'un a gagné
+function checkWinner(board) {
+  const winPatterns = [
+    [0,1,2],[3,4,5],[6,7,8], // lignes
+    [0,3,6],[1,4,7],[2,5,8], // colonnes
+    [0,4,8],[2,4,6],         // diagonales
   ];
-  return lines.some(line => line.every(i => board[i] === sym));
-}
-
-function isFull(board) {
-  return board.every(c => c !== null);
-}
-
-function iaPlay(board) {
-  const empties = board.map((v,i) => v === null ? i : -1).filter(i => i !== -1);
-  if (!empties.length) return -1;
-  return empties[Math.floor(Math.random() * empties.length)];
-}
-
-async function sendStartMessage(channel) {
-  const row = new ActionRowBuilder()
-    .addComponents(
-      new ButtonBuilder()
-        .setCustomId("start_jv_joueur")
-        .setLabel("Joueur vs Joueur")
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId("start_jv_ia")
-        .setLabel("Joueur vs IA")
-        .setStyle(ButtonStyle.Secondary),
-    );
-  await channel.send({
-    content: "🎮 **Morpion** - Choisissez un mode pour commencer !",
-    components: [row],
-  });
+  for (const [a,b,c] of winPatterns) {
+    if (board[a] && board[a] === board[b] && board[a] === board[c]) return board[a];
+  }
+  if (board.every(cell => cell !== null)) return "draw";
+  return null;
 }
 
 client.once("ready", async () => {
   console.log(`🤖 Connecté en tant que ${client.user.tag}`);
+
   const channel = await client.channels.fetch(MORPION_CHANNEL_ID);
-  if (channel) await sendStartMessage(channel);
-});
-
-client.on("messageCreate", async (msg) => {
-  if (msg.author.bot) return;
-  if (msg.channel.id !== MORPION_CHANNEL_ID) return;
-
-  if (msg.content.toLowerCase() === "!morpion") {
-    if (morpionParties.has(msg.channel.id))
-      return msg.reply("Une partie est déjà en cours.");
-    await sendStartMessage(msg.channel);
-  }
-
-  if (msg.content.toLowerCase() === "cancel" && morpionParties.has(msg.channel.id)) {
-    morpionParties.delete(msg.channel.id);
-    await msg.channel.send("⛔ Partie de Morpion annulée.");
-    await sendStartMessage(msg.channel);
+  if (channel) {
+    // Envoie un message avec les boutons de choix de jeu
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("start_morpion").setLabel("🎮 Lancer Morpion 2 joueurs").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("start_pfc").setLabel("✊ Pierre Feuille Ciseaux IA").setStyle(ButtonStyle.Secondary)
+    );
+    await channel.send({ content: "Choisissez votre jeu :", components: [row] });
   }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton()) return;
-  if (interaction.channelId !== MORPION_CHANNEL_ID) return;
 
-  let partie = morpionParties.get(interaction.channelId);
-
-  if (interaction.customId === "start_jv_joueur") {
-    if (partie) return interaction.reply({content:"Une partie est déjà lancée.", ephemeral:true});
-    morpionParties.set(interaction.channelId, {
-      players: [interaction.user.id, null],
-      board: Array(9).fill(null),
-      turn: 0,
-      messageId: null,
-      mode: "jv_joueur",
-    });
-    return interaction.reply({
-      content:`<@${interaction.user.id}> a lancé une partie Morpion (JvJ). Cliquez sur "Rejoindre" pour jouer.`,
-      components: [new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId("join_jv_joueur").setLabel("Rejoindre").setStyle(ButtonStyle.Success)
-      )],
-    });
-  }
-
-  if (interaction.customId === "join_jv_joueur") {
-    if (!partie) return interaction.reply({content:"Aucune partie à rejoindre.", ephemeral:true});
-    if (partie.mode !== "jv_joueur") return interaction.reply({content:"Mode incorrect.", ephemeral:true});
-    if (partie.players[1]) return interaction.reply({content:"La partie a déjà deux joueurs.", ephemeral:true});
-    if (interaction.user.id === partie.players[0]) return interaction.reply({content:"Vous êtes déjà dans la partie.", ephemeral:true});
-    partie.players[1] = interaction.user.id;
-
-    const embed = new EmbedBuilder()
-      .setTitle("🎮 Morpion - Joueur vs Joueur")
-      .setDescription(`Tour de <@${partie.players[partie.turn]}> (${partie.turn === 0 ? "❌" : "⭕"})\n\n` + afficherGrille(partie.board))
-      .setColor("#5865F2");
-
-    const rows = [];
-    for (let r = 0; r < 3; r++) {
-      const row = new ActionRowBuilder();
-      for (let c = 0; c < 3; c++) {
-        const idx = r*3 + c;
-        row.addComponents(
-          new ButtonBuilder()
-            .setCustomId(`morpion_case_${idx}`)
-            .setLabel(partie.board[idx] || " ")
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(partie.board[idx] !== null)
-        );
-      }
-      rows.push(row);
+  // --- Lancer morpion ---
+  if (interaction.customId === "start_morpion") {
+    const channelId = interaction.channel.id;
+    if (games.has(channelId)) {
+      return interaction.reply({ content: "Une partie est déjà en cours ici !", ephemeral: true });
     }
-    const msg = await interaction.reply({embeds: [embed], components: rows, fetchReply:true});
-    partie.messageId = msg.id;
-    morpionParties.set(interaction.channelId, partie);
-    return;
-  }
-
-  if (interaction.customId === "start_jv_ia") {
-    if (partie) return interaction.reply({content:"Une partie est déjà lancée.", ephemeral:true});
-    partie = {
-      players: [interaction.user.id, "IA"],
+    // On crée une nouvelle partie, avec le lanceur comme joueur 1, on attend joueur 2
+    const game = {
       board: Array(9).fill(null),
+      players: [interaction.user.id],
       turn: 0,
       messageId: null,
-      mode: "jv_ia",
     };
-    morpionParties.set(interaction.channelId, partie);
+    games.set(channelId, game);
 
-    const embed = new EmbedBuilder()
-      .setTitle("🎮 Morpion - Joueur vs IA")
-      .setDescription(`Tour de <@${interaction.user.id}> (❌)\n\n` + afficherGrille(partie.board))
-      .setColor("#5865F2");
+    const row = createBoardButtons(game.board);
+    await interaction.reply({ content: `<@${interaction.user.id}> a lancé une partie de Morpion ! En attente d'un 2ème joueur...`, components: [row] });
 
-    const rows = [];
-    for(let r=0; r<3; r++) {
-      const row = new ActionRowBuilder();
-      for(let c=0; c<3; c++) {
-        row.addComponents(
-          new ButtonBuilder()
-            .setCustomId(`morpion_case_${r*3+c}`)
-            .setLabel(" ")
-            .setStyle(ButtonStyle.Secondary)
-        );
-      }
-      rows.push(row);
-    }
-    const msg = await interaction.reply({embeds:[embed], components:rows, fetchReply:true});
-    partie.messageId = msg.id;
-    morpionParties.set(interaction.channelId, partie);
     return;
   }
 
-  if (interaction.customId.startsWith("morpion_case_")) {
-    if (!partie) return interaction.reply({content:"Aucune partie en cours.", ephemeral:true});
-    const idx = parseInt(interaction.customId.split("_")[2]);
-    if (isNaN(idx) || idx < 0 || idx > 8) return interaction.reply({content:"Case invalide.", ephemeral:true});
+  // --- Rejoindre partie morpion (joueur 2) ---
+  const channelId = interaction.channel.id;
+  if (games.has(channelId)) {
+    const game = games.get(channelId);
 
-    const currentPlayer = partie.players[partie.turn];
-    if (partie.mode === "jv_joueur" && interaction.user.id !== currentPlayer) {
-      return interaction.reply({content:"Ce n'est pas votre tour.", ephemeral:true});
-    }
+    // Si bouton clique est un bouton de morpion (0-8)
+    if (/^cell_\d$/.test(interaction.customId)) {
+      const cellIndex = parseInt(interaction.customId.split("_")[1], 10);
 
-    if (partie.board[idx] !== null) {
-      return interaction.reply({content:"Case déjà prise.", ephemeral:true});
-    }
+      // Si pas 2 joueurs, on ajoute celui qui clique (sauf si c'est déjà joueur 1)
+      if (game.players.length === 1 && !game.players.includes(interaction.user.id)) {
+        game.players.push(interaction.user.id);
+      }
 
-    partie.board[idx] = partie.turn === 0 ? "X" : "O";
+      // Refuser si pas joueur 1 ou 2
+      if (!game.players.includes(interaction.user.id)) {
+        return interaction.reply({ content: "Vous ne faites pas partie de cette partie.", ephemeral: true });
+      }
 
-    if (checkWin(partie.board, partie.board[idx])) {
-      const embed = new EmbedBuilder()
-        .setTitle("🎮 Morpion - Partie terminée")
-        .setDescription(afficherGrille(partie.board) + `\n\n🎉 <@${interaction.user.id}> a gagné !`)
-        .setColor("Green");
-      await interaction.update({embeds: [embed], components: []});
-      morpionParties.delete(interaction.channelId);
-      const channel = interaction.channel;
-      await sendStartMessage(channel);
+      // Refuser si pas à son tour
+      if (game.players[game.turn] !== interaction.user.id) {
+        return interaction.reply({ content: "Ce n'est pas votre tour.", ephemeral: true });
+      }
+
+      // Refuser si case déjà prise
+      if (game.board[cellIndex] !== null) {
+        return interaction.reply({ content: "Cette case est déjà prise.", ephemeral: true });
+      }
+
+      // Met à jour la case
+      game.board[cellIndex] = game.turn === 0 ? "X" : "O";
+
+      // Vérifie le résultat
+      const winner = checkWinner(game.board);
+      let content;
+
+      if (winner === "draw") {
+        content = `Match nul !\n${renderBoard(game.board)}`;
+        games.delete(channelId);
+      } else if (winner) {
+        content = `Victoire de <@${game.players[game.turn]}> !\n${renderBoard(game.board)}`;
+        games.delete(channelId);
+      } else {
+        // Continue la partie
+        game.turn = 1 - game.turn;
+        content = `C'est au tour de <@${game.players[game.turn]}> !\n${renderBoard(game.board)}`;
+      }
+
+      // Met à jour le message (ou répond)
+      try {
+        await interaction.update({ content, components: createBoardButtons(game.board) });
+      } catch {
+        await interaction.reply({ content, components: createBoardButtons(game.board), ephemeral: false });
+      }
       return;
     }
+  }
 
-    if (isFull(partie.board)) {
-      const embed = new EmbedBuilder()
-        .setTitle("🎮 Morpion - Partie terminée")
-        .setDescription(afficherGrille(partie.board) + "\n\nMatch nul !")
-        .setColor("Orange");
-      await interaction.update({embeds: [embed], components: []});
-      morpionParties.delete(interaction.channelId);
-      const channel = interaction.channel;
-      await sendStartMessage(channel);
-      return;
+  // --- Pierre Feuille Ciseaux ---
+  if (interaction.customId === "start_pfc") {
+    const pfcRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("pierre").setLabel("🪨 Pierre").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("feuille").setLabel("📄 Feuille").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("ciseaux").setLabel("✂️ Ciseaux").setStyle(ButtonStyle.Danger)
+    );
+    return interaction.reply({ content: "Choisissez votre coup :", components: [pfcRow], ephemeral: true });
+  }
+
+  // --- Réponse PFC ---
+  const pfcChoices = ["pierre", "feuille", "ciseaux"];
+  if (pfcChoices.includes(interaction.customId)) {
+    const userChoice = interaction.customId;
+    const botChoice = pfcChoices[Math.floor(Math.random() * pfcChoices.length)];
+
+    let result = "🤝 Égalité !";
+    if (
+      (userChoice === "pierre" && botChoice === "ciseaux") ||
+      (userChoice === "feuille" && botChoice === "pierre") ||
+      (userChoice === "ciseaux" && botChoice === "feuille")
+    ) {
+      result = "🎉 Vous gagnez !";
+    } else if (userChoice !== botChoice) {
+      result = "😢 Vous perdez !";
     }
 
-    partie.turn = 1 - partie.turn;
-
-    if (partie.mode === "jv_ia" && partie.turn === 1) {
-      const iaMove = iaPlay(partie.board);
-      if (iaMove !== -1) partie.board[iaMove] = "O";
-
-      if (checkWin(partie.board, "O")) {
-        const embed = new EmbedBuilder()
-          .setTitle("🎮 Morpion - Partie terminée")
-          .setDescription(afficherGrille(partie.board) + "\n\n🤖 L'IA a gagné !")
-          .setColor("Red");
-        await interaction.update({embeds: [embed], components: []});
-        morpionParties.delete(interaction.channelId);
-        const channel = interaction.channel;
-        await sendStartMessage(channel);
-        return;
-      }
-
-      if (isFull(partie.board)) {
-        const embed = new EmbedBuilder()
-          .setTitle("🎮 Morpion - Partie terminée")
-          .setDescription(afficherGrille(partie.board) + "\n\nMatch nul !")
-          .setColor("Orange");
-        await interaction.update({embeds: [embed], components: []});
-        morpionParties.delete(interaction.channelId);
-        const channel = interaction.channel;
-        await sendStartMessage(channel);
-        return;
-      }
-
-      partie.turn = 0;
-    }
-
-    const embed = new EmbedBuilder()
-      .setTitle(partie.mode === "jv_ia" ? "🎮 Morpion - Joueur vs IA" : "🎮 Morpion - Joueur vs Joueur")
-      .setDescription(`Tour de <@${partie.players[partie.turn]}> (${partie.turn === 0 ? "❌" : "⭕"})\n\n` + afficherGrille(partie.board))
-      .setColor("#5865F2");
-
-    const rows = [];
-    for(let r=0; r<3; r++) {
-      const row = new ActionRowBuilder();
-      for(let c=0; c<3; c++) {
-        const i = r*3+c;
-        row.addComponents(
-          new ButtonBuilder()
-            .setCustomId(`morpion_case_${i}`)
-            .setLabel(partie.board[i] || " ")
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(partie.board[i] !== null)
-        );
-      }
-      rows.push(row);
-    }
-
-    await interaction.update({embeds: [embed], components: rows});
+    return interaction.update({ content: `Vous : ${userChoice} | Bot : ${botChoice}\n${result}`, components: [] });
   }
 });
 
-client.login(config.token);
+// Crée les boutons du plateau de morpion selon l’état du board
+function createBoardButtons(board) {
+  const row1 = new ActionRowBuilder();
+  const row2 = new ActionRowBuilder();
+  const row3 = new ActionRowBuilder();
+
+  const symbols = {
+    null: "⬜",
+    X: "❌",
+    O: "⭕"
+  };
+
+  for (let i = 0; i < 9; i++) {
+    const button = new ButtonBuilder()
+      .setCustomId(`cell_${i}`)
+      .setLabel(symbols[board[i]])
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(board[i] !== null);
+
+    if (i < 3) row1.addComponents(button);
+    else if (i < 6) row2.addComponents(button);
+    else row3.addComponents(button);
+  }
+
+  return [row1, row2, row3];
+}
+
+client.login(process.env.TOKEN);
