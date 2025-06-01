@@ -1,0 +1,17 @@
+{
+  "name": "morpion-bot",
+  "version": "1.0.0",
+  "description": "Bot Discord Morpion (Tic Tac Toe) avec jeu contre IA ou joueur",
+  "main": "morpionBot.js",
+  "scripts": {
+    "start": "node morpionBot.js"
+  },
+  "author": "TonNom",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.11.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
