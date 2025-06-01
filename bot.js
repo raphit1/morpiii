@@ -1,213 +1,210 @@
-const { 
-  Client, 
-  GatewayIntentBits, 
-  Partials, 
-  ActionRowBuilder, 
-  ButtonBuilder, 
-  ButtonStyle, 
-  Events, 
-  EmbedBuilder 
-} = require("discord.js");
-
-const MORPION_CHANNEL_ID = "1378737038261620806";
+const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, Events } = require("discord.js");
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
-  partials: [Partials.Channel],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
-// --- Variables morpion ---
-const games = new Map(); // channelId -> game state
+// --- PFC (Pierre-Feuille-Ciseaux) ---
 
-// Game state example:
-// {
-//   board: Array(9).fill(null), // 3x3 grid flattened
-//   players: [userId1, userId2],
-//   turn: 0, // index 0 or 1 for players
-//   messageId: "discordMessageId",
-// }
+const pfcGames = new Map();
+const pfcChoices = ["Pierre", "Feuille", "Ciseaux"];
 
-// Fonction pour dessiner le morpion en emojis
-function renderBoard(board) {
-  const symbols = { null: "⬜", X: "❌", O: "⭕" };
-  let str = "";
-  for (let i = 0; i < 9; i++) {
-    str += symbols[board[i]];
-    if ((i + 1) % 3 === 0) str += "\n";
-  }
-  return str;
+function getPfcWinner(c1, c2) {
+  if (c1 === c2) return 0; // égalité
+  if (
+    (c1 === "Pierre" && c2 === "Ciseaux") ||
+    (c1 === "Feuille" && c2 === "Pierre") ||
+    (c1 === "Ciseaux" && c2 === "Feuille")
+  ) return 1;
+  return 2;
 }
 
-// Vérifie si quelqu'un a gagné
-function checkWinner(board) {
-  const winPatterns = [
-    [0,1,2],[3,4,5],[6,7,8], // lignes
-    [0,3,6],[1,4,7],[2,5,8], // colonnes
-    [0,4,8],[2,4,6],         // diagonales
-  ];
-  for (const [a,b,c] of winPatterns) {
-    if (board[a] && board[a] === board[b] && board[a] === board[c]) return board[a];
-  }
-  if (board.every(cell => cell !== null)) return "draw";
-  return null;
+// --- Ice Fall ---
+
+const iceFallGames = new Map();
+
+function rollIceFall() {
+  return Math.floor(Math.random() * 6) + 1; // 1 à 6
 }
 
-client.once("ready", async () => {
-  console.log(`🤖 Connecté en tant que ${client.user.tag}`);
+const ICEFALL_MAX_STEPS = 10;
 
-  const channel = await client.channels.fetch(MORPION_CHANNEL_ID);
-  if (channel) {
-    // Envoie un message avec les boutons de choix de jeu
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("start_morpion").setLabel("🎮 Lancer Morpion 2 joueurs").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("start_pfc").setLabel("✊ Pierre Feuille Ciseaux IA").setStyle(ButtonStyle.Secondary)
-    );
-    await channel.send({ content: "Choisissez votre jeu :", components: [row] });
-  }
-});
+client.on("messageCreate", async (message) => {
+  if (message.author.bot) return;
 
-client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isButton()) return;
+  const content = message.content.trim();
 
-  // --- Lancer morpion ---
-  if (interaction.customId === "start_morpion") {
-    const channelId = interaction.channel.id;
-    if (games.has(channelId)) {
-      return interaction.reply({ content: "Une partie est déjà en cours ici !", ephemeral: true });
+  // --- Commande PFC ---
+
+  if (content.startsWith("!pfc")) {
+    if (pfcGames.has(message.channel.id)) {
+      return message.reply("Une partie de PFC est déjà en cours dans ce salon.");
     }
-    // On crée une nouvelle partie, avec le lanceur comme joueur 1, on attend joueur 2
-    const game = {
-      board: Array(9).fill(null),
-      players: [interaction.user.id],
-      turn: 0,
-      messageId: null,
-    };
-    games.set(channelId, game);
 
-    const row = createBoardButtons(game.board);
-    await interaction.reply({ content: `<@${interaction.user.id}> a lancé une partie de Morpion ! En attente d'un 2ème joueur...`, components: [row] });
+    const args = content.split(/\s+/);
+    if (args.length < 2 || message.mentions.users.size < 1) {
+      return message.reply("Usage : !pfc @adversaire");
+    }
+
+    const opponent = message.mentions.users.first();
+
+    if (opponent.bot) return message.reply("Tu ne peux pas jouer contre un bot.");
+    if (opponent.id === message.author.id) return message.reply("Tu ne peux pas jouer contre toi-même.");
+
+    pfcGames.set(message.channel.id, {
+      players: [message.author.id, opponent.id],
+      choices: new Map()
+    });
+
+    const row1 = new ActionRowBuilder();
+    pfcChoices.forEach(choice => {
+      row1.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`pfc_${message.author.id}_${choice}`)
+          .setLabel(choice)
+          .setStyle(ButtonStyle.Primary)
+      );
+    });
+
+    const row2 = new ActionRowBuilder();
+    pfcChoices.forEach(choice => {
+      row2.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`pfc_${opponent.id}_${choice}`)
+          .setLabel(choice)
+          .setStyle(ButtonStyle.Secondary)
+      );
+    });
+
+    await message.channel.send({
+      content: `${message.author} vs ${opponent} ! Choisissez votre coup :`,
+      components: [row1, row2]
+    });
 
     return;
   }
 
-  // --- Rejoindre partie morpion (joueur 2) ---
-  const channelId = interaction.channel.id;
-  if (games.has(channelId)) {
-    const game = games.get(channelId);
+  // --- Commande IceFall ---
 
-    // Si bouton clique est un bouton de morpion (0-8)
-    if (/^cell_\d$/.test(interaction.customId)) {
-      const cellIndex = parseInt(interaction.customId.split("_")[1], 10);
-
-      // Si pas 2 joueurs, on ajoute celui qui clique (sauf si c'est déjà joueur 1)
-      if (game.players.length === 1 && !game.players.includes(interaction.user.id)) {
-        game.players.push(interaction.user.id);
-      }
-
-      // Refuser si pas joueur 1 ou 2
-      if (!game.players.includes(interaction.user.id)) {
-        return interaction.reply({ content: "Vous ne faites pas partie de cette partie.", ephemeral: true });
-      }
-
-      // Refuser si pas à son tour
-      if (game.players[game.turn] !== interaction.user.id) {
-        return interaction.reply({ content: "Ce n'est pas votre tour.", ephemeral: true });
-      }
-
-      // Refuser si case déjà prise
-      if (game.board[cellIndex] !== null) {
-        return interaction.reply({ content: "Cette case est déjà prise.", ephemeral: true });
-      }
-
-      // Met à jour la case
-      game.board[cellIndex] = game.turn === 0 ? "X" : "O";
-
-      // Vérifie le résultat
-      const winner = checkWinner(game.board);
-      let content;
-
-      if (winner === "draw") {
-        content = `Match nul !\n${renderBoard(game.board)}`;
-        games.delete(channelId);
-      } else if (winner) {
-        content = `Victoire de <@${game.players[game.turn]}> !\n${renderBoard(game.board)}`;
-        games.delete(channelId);
-      } else {
-        // Continue la partie
-        game.turn = 1 - game.turn;
-        content = `C'est au tour de <@${game.players[game.turn]}> !\n${renderBoard(game.board)}`;
-      }
-
-      // Met à jour le message (ou répond)
-      try {
-        await interaction.update({ content, components: createBoardButtons(game.board) });
-      } catch {
-        await interaction.reply({ content, components: createBoardButtons(game.board), ephemeral: false });
-      }
-      return;
+  if (content === "!icefall") {
+    if (iceFallGames.has(message.author.id)) {
+      return message.reply("Tu as déjà une partie Ice Fall en cours !");
     }
-  }
 
-  // --- Pierre Feuille Ciseaux ---
-  if (interaction.customId === "start_pfc") {
-    const pfcRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("pierre").setLabel("🪨 Pierre").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("feuille").setLabel("📄 Feuille").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId("ciseaux").setLabel("✂️ Ciseaux").setStyle(ButtonStyle.Danger)
+    iceFallGames.set(message.author.id, { step: 0, alive: true });
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`icefall_step_${message.author.id}`)
+        .setLabel("Faire un pas")
+        .setStyle(ButtonStyle.Success)
     );
-    return interaction.reply({ content: "Choisissez votre coup :", components: [pfcRow], ephemeral: true });
-  }
 
-  // --- Réponse PFC ---
-  const pfcChoices = ["pierre", "feuille", "ciseaux"];
-  if (pfcChoices.includes(interaction.customId)) {
-    const userChoice = interaction.customId;
-    const botChoice = pfcChoices[Math.floor(Math.random() * pfcChoices.length)];
+    await message.channel.send({
+      content: `${message.author}, la partie Ice Fall commence ! Tu es sur la glace, avance prudemment...`,
+      components: [row]
+    });
 
-    let result = "🤝 Égalité !";
-    if (
-      (userChoice === "pierre" && botChoice === "ciseaux") ||
-      (userChoice === "feuille" && botChoice === "pierre") ||
-      (userChoice === "ciseaux" && botChoice === "feuille")
-    ) {
-      result = "🎉 Vous gagnez !";
-    } else if (userChoice !== botChoice) {
-      result = "😢 Vous perdez !";
-    }
-
-    return interaction.update({ content: `Vous : ${userChoice} | Bot : ${botChoice}\n${result}`, components: [] });
+    return;
   }
 });
 
-// Crée les boutons du plateau de morpion selon l’état du board
-function createBoardButtons(board) {
-  const row1 = new ActionRowBuilder();
-  const row2 = new ActionRowBuilder();
-  const row3 = new ActionRowBuilder();
+client.on(Events.InteractionCreate, async interaction => {
+  if (!interaction.isButton()) return;
 
-  const symbols = {
-    null: "⬜",
-    X: "❌",
-    O: "⭕"
-  };
+  const customId = interaction.customId;
 
-  for (let i = 0; i < 9; i++) {
-    const button = new ButtonBuilder()
-      .setCustomId(`cell_${i}`)
-      .setLabel(symbols[board[i]])
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(board[i] !== null);
+  // --- PFC buttons ---
 
-    if (i < 3) row1.addComponents(button);
-    else if (i < 6) row2.addComponents(button);
-    else row3.addComponents(button);
+  if (customId.startsWith("pfc_")) {
+    const [prefix, userId, choice] = customId.split("_");
+    const game = pfcGames.get(interaction.channel.id);
+
+    if (!game) {
+      return interaction.reply({ content: "Aucune partie PFC en cours ici.", ephemeral: true });
+    }
+
+    if (interaction.user.id !== userId) {
+      return interaction.reply({ content: "Ce n'est pas ton bouton !", ephemeral: true });
+    }
+
+    if (game.choices.has(userId)) {
+      return interaction.reply({ content: "Tu as déjà joué.", ephemeral: true });
+    }
+
+    game.choices.set(userId, choice);
+    await interaction.deferUpdate();
+
+    if (game.choices.size === 2) {
+      const p1 = game.players[0];
+      const p2 = game.players[1];
+      const c1 = game.choices.get(p1);
+      const c2 = game.choices.get(p2);
+
+      let resultMsg;
+      const winner = getPfcWinner(c1, c2);
+      if (winner === 0) {
+        resultMsg = `Égalité ! Les deux joueurs ont choisi **${c1}**.`;
+      } else if (winner === 1) {
+        resultMsg = `<@${p1}> gagne avec **${c1}** contre **${c2}** !`;
+      } else {
+        resultMsg = `<@${p2}> gagne avec **${c2}** contre **${c1}** !`;
+      }
+
+      await interaction.followUp({ content: resultMsg });
+      pfcGames.delete(interaction.channel.id);
+    }
+    return;
   }
 
-  return [row1, row2, row3];
-}
+  // --- IceFall buttons ---
+
+  if (customId.startsWith("icefall_step_")) {
+    const userId = customId.split("_")[2];
+    if (interaction.user.id !== userId) {
+      return interaction.reply({ content: "Ce n'est pas ton bouton !", ephemeral: true });
+    }
+
+    const game = iceFallGames.get(userId);
+    if (!game || !game.alive) {
+      return interaction.reply({ content: "Tu n'as pas de partie Ice Fall en cours.", ephemeral: true });
+    }
+
+    // Faire un pas
+    const roll = rollIceFall();
+    game.step++;
+
+    let msg;
+    if (roll === 1) {
+      game.alive = false;
+      msg = `Oh non ! Tu es tombé dans la glace au pas ${game.step} ❄️🥶. Partie terminée.`;
+      iceFallGames.delete(userId);
+    } else if (game.step >= ICEFALL_MAX_STEPS) {
+      game.alive = false;
+      msg = `Bravo ! Tu as réussi à faire ${ICEFALL_MAX_STEPS} pas sans tomber, tu as survécu à l'Ice Fall ! 🎉`;
+      iceFallGames.delete(userId);
+    } else {
+      msg = `Pas ${game.step} fait, tu as survécu. (Chance de tomber 1/6 à chaque pas) Continue ?`;
+    }
+
+    const row = new ActionRowBuilder();
+
+    if (game.alive) {
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`icefall_step_${userId}`)
+          .setLabel("Faire un pas")
+          .setStyle(ButtonStyle.Success)
+      );
+    }
+
+    await interaction.update({
+      content: `<@${userId}> ${msg}`,
+      components: game.alive ? [row] : []
+    });
+
+    return;
+  }
+});
 
 client.login(process.env.TOKEN);
