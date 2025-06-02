@@ -1,210 +1,201 @@
-const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, Events } = require("discord.js");
+const { Client, GatewayIntentBits, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, Events, EmbedBuilder } = require("discord.js");
+require("dotenv").config();
+
+const ICE_FALL_CHANNEL_ID = "1378737038261620806"; // Change selon ton serveur
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
 
-// --- PFC (Pierre-Feuille-Ciseaux) ---
+// ==== PIERRE FEUILLE CISEAUX ====
 
-const pfcGames = new Map();
-const pfcChoices = ["Pierre", "Feuille", "Ciseaux"];
+const pfcGames = new Map(); // channelId => { player1Id, player2Id, player1Choice, player2Choice, messageId }
 
-function getPfcWinner(c1, c2) {
-  if (c1 === c2) return 0; // égalité
+const choices = ["Pierre", "Feuille", "Ciseaux"];
+
+function determineWinner(choice1, choice2) {
+  if (choice1 === choice2) return 0; // Egalité
   if (
-    (c1 === "Pierre" && c2 === "Ciseaux") ||
-    (c1 === "Feuille" && c2 === "Pierre") ||
-    (c1 === "Ciseaux" && c2 === "Feuille")
-  ) return 1;
-  return 2;
+    (choice1 === "Pierre" && choice2 === "Ciseaux") ||
+    (choice1 === "Feuille" && choice2 === "Pierre") ||
+    (choice1 === "Ciseaux" && choice2 === "Feuille")
+  ) return 1; // Player1 gagne
+  return 2; // Player2 gagne
 }
 
-// --- Ice Fall ---
+// ==== ICE FALL ====
 
-const iceFallGames = new Map();
+const iceFallStates = new Map(); // userId => { steps, lastMessageId }
 
-function rollIceFall() {
-  return Math.floor(Math.random() * 6) + 1; // 1 à 6
+const MAX_STEPS = 10;
+
+function getIceFallEmbed(steps) {
+  const remaining = MAX_STEPS - steps;
+  return new EmbedBuilder()
+    .setTitle("❄️ Ice Fall")
+    .setDescription(`Vous avez fait **${steps}** pas.\nIl vous reste **${remaining}** pas avant la fin.\n\nChaque pas a 1 chance sur 6 de faire tomber la glace !\nAppuyez sur "Faire un pas" pour avancer ou "Reset" pour recommencer.`)
+    .setColor(0x00bfff);
 }
 
-const ICEFALL_MAX_STEPS = 10;
+const iceFallButtons = () =>
+  new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("ice_step").setLabel("Faire un pas").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("ice_reset").setLabel("Reset").setStyle(ButtonStyle.Danger)
+  );
+
+// ==== BOT READY ====
+
+client.once("ready", () => {
+  console.log(`🤖 Connecté en tant que ${client.user.tag}`);
+});
+
+// ==== MESSAGE CREATE ====
 
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  const content = message.content.trim();
+  const content = message.content.toLowerCase();
 
-  // --- Commande PFC ---
-
-  if (content.startsWith("!pfc")) {
+  // Commande PFC (Pierre-Feuille-Ciseaux)
+  if (content === "!pfc") {
     if (pfcGames.has(message.channel.id)) {
-      return message.reply("Une partie de PFC est déjà en cours dans ce salon.");
+      return message.reply("Une partie de Pierre-Feuille-Ciseaux est déjà en cours dans ce salon !");
     }
+    // Attente d'un second joueur
+    pfcGames.set(message.channel.id, { player1Id: message.author.id, player2Id: null, player1Choice: null, player2Choice: null, messageId: null });
+    return message.channel.send(`🎮 ${message.author} a démarré une partie de Pierre-Feuille-Ciseaux ! Quelqu'un veut jouer avec lui ? Tapez \`!join\` pour participer.`);
+  }
 
-    const args = content.split(/\s+/);
-    if (args.length < 2 || message.mentions.users.size < 1) {
-      return message.reply("Usage : !pfc @adversaire");
-    }
+  // Rejoindre la partie PFC
+  if (content === "!join") {
+    const game = pfcGames.get(message.channel.id);
+    if (!game) return; // Pas de partie en cours
+    if (game.player2Id) return message.reply("La partie a déjà 2 joueurs.");
+    if (message.author.id === game.player1Id) return message.reply("Vous êtes déjà dans la partie.");
 
-    const opponent = message.mentions.users.first();
-
-    if (opponent.bot) return message.reply("Tu ne peux pas jouer contre un bot.");
-    if (opponent.id === message.author.id) return message.reply("Tu ne peux pas jouer contre toi-même.");
-
-    pfcGames.set(message.channel.id, {
-      players: [message.author.id, opponent.id],
-      choices: new Map()
-    });
-
-    const row1 = new ActionRowBuilder();
-    pfcChoices.forEach(choice => {
-      row1.addComponents(
+    game.player2Id = message.author.id;
+    // On envoie les boutons pour les choix des 2 joueurs
+    const row = new ActionRowBuilder().addComponents(
+      ...choices.map((choice) =>
         new ButtonBuilder()
-          .setCustomId(`pfc_${message.author.id}_${choice}`)
-          .setLabel(choice)
-          .setStyle(ButtonStyle.Primary)
-      );
-    });
-
-    const row2 = new ActionRowBuilder();
-    pfcChoices.forEach(choice => {
-      row2.addComponents(
-        new ButtonBuilder()
-          .setCustomId(`pfc_${opponent.id}_${choice}`)
+          .setCustomId(`pfc_${choice.toLowerCase()}`)
           .setLabel(choice)
           .setStyle(ButtonStyle.Secondary)
-      );
-    });
-
-    await message.channel.send({
-      content: `${message.author} vs ${opponent} ! Choisissez votre coup :`,
-      components: [row1, row2]
-    });
-
-    return;
-  }
-
-  // --- Commande IceFall ---
-
-  if (content === "!icefall") {
-    if (iceFallGames.has(message.author.id)) {
-      return message.reply("Tu as déjà une partie Ice Fall en cours !");
-    }
-
-    iceFallGames.set(message.author.id, { step: 0, alive: true });
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`icefall_step_${message.author.id}`)
-        .setLabel("Faire un pas")
-        .setStyle(ButtonStyle.Success)
+      )
     );
 
-    await message.channel.send({
-      content: `${message.author}, la partie Ice Fall commence ! Tu es sur la glace, avance prudemment...`,
-      components: [row]
+    const msg = await message.channel.send({
+      content: `🎮 Partie démarrée entre <@${game.player1Id}> et <@${game.player2Id}> !\nChaque joueur, choisissez votre coup en cliquant sur un bouton.`,
+      components: [row],
     });
 
+    game.messageId = msg.id;
+    pfcGames.set(message.channel.id, game);
+    return;
+  }
+
+  // Commande Ice Fall
+  if (content === "!icefall") {
+    const embed = getIceFallEmbed(0);
+    const msg = await message.channel.send({ embeds: [embed], components: [iceFallButtons()] });
+    iceFallStates.set(message.author.id, { steps: 0, lastMessageId: msg.id });
     return;
   }
 });
 
-client.on(Events.InteractionCreate, async interaction => {
+// ==== INTERACTION CREATE ====
+
+client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton()) return;
 
-  const customId = interaction.customId;
+  const { customId, user, channel } = interaction;
 
-  // --- PFC buttons ---
-
+  // Gestion Pierre-Feuille-Ciseaux
   if (customId.startsWith("pfc_")) {
-    const [prefix, userId, choice] = customId.split("_");
-    const game = pfcGames.get(interaction.channel.id);
+    const choice = customId.slice(4).charAt(0).toUpperCase() + customId.slice(5);
+    const game = pfcGames.get(channel.id);
+    if (!game) return interaction.reply({ content: "Aucune partie en cours ici.", ephemeral: true });
 
-    if (!game) {
-      return interaction.reply({ content: "Aucune partie PFC en cours ici.", ephemeral: true });
+    if (user.id !== game.player1Id && user.id !== game.player2Id) {
+      return interaction.reply({ content: "Vous ne participez pas à cette partie.", ephemeral: true });
     }
 
-    if (interaction.user.id !== userId) {
-      return interaction.reply({ content: "Ce n'est pas ton bouton !", ephemeral: true });
+    // Attribution du choix
+    if (user.id === game.player1Id) {
+      if (game.player1Choice) return interaction.reply({ content: "Vous avez déjà choisi.", ephemeral: true });
+      game.player1Choice = choice;
+    } else {
+      if (game.player2Choice) return interaction.reply({ content: "Vous avez déjà choisi.", ephemeral: true });
+      game.player2Choice = choice;
     }
 
-    if (game.choices.has(userId)) {
-      return interaction.reply({ content: "Tu as déjà joué.", ephemeral: true });
-    }
+    // Mise à jour du jeu
+    pfcGames.set(channel.id, game);
+    await interaction.reply({ content: `Vous avez choisi **${choice}**.`, ephemeral: true });
 
-    game.choices.set(userId, choice);
-    await interaction.deferUpdate();
+    // Si les deux ont choisi, on calcule résultat
+    if (game.player1Choice && game.player2Choice) {
+      let resultText;
+      const res = determineWinner(game.player1Choice, game.player2Choice);
+      if (res === 0) resultText = "Égalité ! 🤝";
+      else if (res === 1) resultText = `<@${game.player1Id}> gagne ! 🎉`;
+      else resultText = `<@${game.player2Id}> gagne ! 🎉`;
 
-    if (game.choices.size === 2) {
-      const p1 = game.players[0];
-      const p2 = game.players[1];
-      const c1 = game.choices.get(p1);
-      const c2 = game.choices.get(p2);
+      await channel.send(
+        `🕹️ Résultat de la partie entre <@${game.player1Id}> et <@${game.player2Id}> :\n` +
+          `- ${choices[0]}: <@${game.player1Id}> a choisi **${game.player1Choice}**\n` +
+          `- ${choices[1]}: <@${game.player2Id}> a choisi **${game.player2Choice}**\n` +
+          `\n🏆 ${resultText}`
+      );
 
-      let resultMsg;
-      const winner = getPfcWinner(c1, c2);
-      if (winner === 0) {
-        resultMsg = `Égalité ! Les deux joueurs ont choisi **${c1}**.`;
-      } else if (winner === 1) {
-        resultMsg = `<@${p1}> gagne avec **${c1}** contre **${c2}** !`;
-      } else {
-        resultMsg = `<@${p2}> gagne avec **${c2}** contre **${c1}** !`;
-      }
-
-      await interaction.followUp({ content: resultMsg });
-      pfcGames.delete(interaction.channel.id);
+      pfcGames.delete(channel.id);
     }
     return;
   }
 
-  // --- IceFall buttons ---
+  // Gestion Ice Fall
 
-  if (customId.startsWith("icefall_step_")) {
-    const userId = customId.split("_")[2];
-    if (interaction.user.id !== userId) {
-      return interaction.reply({ content: "Ce n'est pas ton bouton !", ephemeral: true });
+  if (customId === "ice_step") {
+    const state = iceFallStates.get(user.id);
+    if (!state) return interaction.reply({ content: "Vous n'avez pas de partie Ice Fall en cours. Faites `!icefall` pour commencer.", ephemeral: true });
+
+    // Supprime le message précédent
+    if (state.lastMessageId) {
+      try {
+        const msg = await channel.messages.fetch(state.lastMessageId);
+        if (msg) await msg.delete();
+      } catch {}
     }
 
-    const game = iceFallGames.get(userId);
-    if (!game || !game.alive) {
-      return interaction.reply({ content: "Tu n'as pas de partie Ice Fall en cours.", ephemeral: true });
-    }
-
-    // Faire un pas
-    const roll = rollIceFall();
-    game.step++;
-
-    let msg;
-    if (roll === 1) {
-      game.alive = false;
-      msg = `Oh non ! Tu es tombé dans la glace au pas ${game.step} ❄️🥶. Partie terminée.`;
-      iceFallGames.delete(userId);
-    } else if (game.step >= ICEFALL_MAX_STEPS) {
-      game.alive = false;
-      msg = `Bravo ! Tu as réussi à faire ${ICEFALL_MAX_STEPS} pas sans tomber, tu as survécu à l'Ice Fall ! 🎉`;
-      iceFallGames.delete(userId);
+    // On avance un pas
+    const stepChance = Math.floor(Math.random() * 6) + 1; // 1 à 6
+    if (stepChance === 1) {
+      // Tombe dans la glace
+      iceFallStates.delete(user.id);
+      await interaction.reply({ content: `❄️ Oh non ! Vous êtes tombé dans la glace après ${state.steps} pas ! Partie terminée.`, ephemeral: true });
     } else {
-      msg = `Pas ${game.step} fait, tu as survécu. (Chance de tomber 1/6 à chaque pas) Continue ?`;
+      state.steps++;
+      if (state.steps >= MAX_STEPS) {
+        iceFallStates.delete(user.id);
+        await interaction.reply({ content: `🎉 Bravo ! Vous avez franchi la glace en ${state.steps} pas sans tomber !`, ephemeral: true });
+      } else {
+        const embed = getIceFallEmbed(state.steps);
+        const msg = await channel.send({ embeds: [embed], components: [iceFallButtons()] });
+        state.lastMessageId = msg.id;
+        iceFallStates.set(user.id, state);
+        await interaction.reply({ content: "✅ Pas réussi, continuez !", ephemeral: true });
+      }
     }
-
-    const row = new ActionRowBuilder();
-
-    if (game.alive) {
-      row.addComponents(
-        new ButtonBuilder()
-          .setCustomId(`icefall_step_${userId}`)
-          .setLabel("Faire un pas")
-          .setStyle(ButtonStyle.Success)
-      );
-    }
-
-    await interaction.update({
-      content: `<@${userId}> ${msg}`,
-      components: game.alive ? [row] : []
-    });
-
     return;
+  }
+
+  if (customId === "ice_reset") {
+    iceFallStates.delete(user.id);
+    await interaction.reply({ content: "🔄 Partie Ice Fall réinitialisée. Faites `!icefall` pour recommencer.", ephemeral: true });
   }
 });
+
+// ==== LOGIN ====
 
 client.login(process.env.TOKEN);
