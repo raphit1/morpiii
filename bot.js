@@ -6,14 +6,17 @@ const {
   ButtonBuilder,
   ButtonStyle,
   Events,
-  ComponentType,
 } = require('discord.js');
 
-const TOKEN = process.env.TOKEN; // Token dans Render env vars
-const GAME_CHANNEL_ID = '1378737038261620806';
+const TOKEN = process.env.TOKEN; // Mets ton token en variable d’environnement Render
+const GAME_CHANNEL_ID = '1378737038261620806'; // ID du salon de jeu
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
   partials: [Partials.Channel],
 });
 
@@ -24,8 +27,11 @@ const PFC_CHOICES = ['Pierre', 'Feuille', 'Ciseaux'];
 
 async function sendGameMenu(channel) {
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('pfc').setLabel('Pierre Feuille Ciseaux').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('icefall_start').setLabel('Ice Fall').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId('pfc')
+      .setLabel('Pierre Feuille Ciseaux')
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('icefall_start').setLabel('Ice Fall').setStyle(ButtonStyle.Danger)
   );
 
   await channel.send({
@@ -45,7 +51,8 @@ async function playPFC(interaction, userChoice) {
     (userChoice === 'Pierre' && botChoice === 'Ciseaux') ||
     (userChoice === 'Feuille' && botChoice === 'Pierre') ||
     (userChoice === 'Ciseaux' && botChoice === 'Feuille')
-  ) result = 'Tu as gagné ! 🎉';
+  )
+    result = 'Tu as gagné ! 🎉';
   else result = 'Tu as perdu... 😞';
 
   return `🪨 Pierre / 📄 Feuille / ✂️ Ciseaux\nTu as choisi **${userChoice}**\nLe bot a choisi **${botChoice}**\n\n**${result}**`;
@@ -53,7 +60,6 @@ async function playPFC(interaction, userChoice) {
 
 // --- ICE FALL ---
 
-// Crée la grille 6x10, avec cases vides
 function createGrid() {
   const rows = 10;
   const cols = 6;
@@ -68,9 +74,7 @@ function createGrid() {
   return grid;
 }
 
-// Convertit la grille en string (avec emoji)
 function gridToString(grid, highlight = null) {
-  // highlight = {row, col} ou null
   return grid
     .map((row, r) =>
       row
@@ -86,17 +90,14 @@ function gridToString(grid, highlight = null) {
 }
 
 async function animateFall(channel, message, path, i = 0) {
-  // path = [{row, col}, ...] cases parcourues
   if (i >= path.length) return;
 
   const grid = createGrid();
-  // On colorie la case courante en rouge si chute, sinon en bleu (car on "avance")
   for (let j = 0; j < i; j++) {
     const { row, col } = path[j];
     grid[row][col] = '🟦'; // case "marchée" en bleu
   }
 
-  // La case actuelle : rouge si chute (dernier), sinon bleu
   const current = path[i];
   if (i === path.length - 1) {
     // chute ici
@@ -104,7 +105,6 @@ async function animateFall(channel, message, path, i = 0) {
     await message.edit({ content });
     return;
   } else {
-    // pas chute, case bleu
     grid[current.row][current.col] = '🟦';
     const content = gridToString(grid);
     await message.edit({ content });
@@ -113,8 +113,6 @@ async function animateFall(channel, message, path, i = 0) {
 }
 
 async function startIceFall(interaction) {
-  // Initialisation partie IceFall
-
   const userId = interaction.user.id;
   if (iceFallGames.has(userId)) {
     await interaction.reply({ content: 'Tu as déjà une partie Ice Fall en cours !', ephemeral: true });
@@ -122,18 +120,12 @@ async function startIceFall(interaction) {
   }
 
   const grid = createGrid();
-
-  // Stocke la partie, position départ = dernière ligne, colonne = à choisir par joueur
   iceFallGames.set(userId, { grid, position: { row: 9, col: null } });
 
-  // Propose les boutons colonnes (6 colonnes)
   const row = new ActionRowBuilder();
   for (let c = 0; c < 6; c++) {
     row.addComponents(
-      new ButtonBuilder()
-        .setCustomId(`icefall_col_${c}`)
-        .setLabel(`${c + 1}`)
-        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`icefall_col_${c}`).setLabel(`${c + 1}`).setStyle(ButtonStyle.Primary)
     );
   }
 
@@ -155,10 +147,8 @@ async function handleIceFallMove(interaction) {
   const col = parseInt(interaction.customId.split('_')[2], 10);
 
   if (game.position.col === null) {
-    // Première colonne choisie par le joueur
     game.position.col = col;
   } else if (col !== game.position.col) {
-    // On ne peut changer de colonne en cours de partie
     await interaction.reply({ content: `Tu dois continuer dans la colonne ${game.position.col + 1}`, ephemeral: true });
     return;
   }
@@ -166,20 +156,15 @@ async function handleIceFallMove(interaction) {
   const channel = interaction.channel;
   await interaction.deferUpdate();
 
-  // Avance d'une case vers la gauche (en remontant la ligne)
   if (game.position.row <= 0) {
-    // arrivé en haut sans tomber = victoire
     iceFallGames.delete(userId);
     await channel.send(`🎉 Bravo ${interaction.user}, tu as atteint le sommet sans tomber !`);
     sendGameMenu(channel);
     return;
   }
 
-  // Tirage 1/6 chance de tomber
   const fallen = Math.floor(Math.random() * 6) === 0;
   const path = [];
-
-  // Génère le chemin d'animation : de la position actuelle à la position au dessus (row-1)
   for (let r = game.position.row; r >= game.position.row - 1; r--) {
     path.push({ row: r, col: game.position.col });
   }
@@ -188,28 +173,16 @@ async function handleIceFallMove(interaction) {
   lastResultMessageId = lastResultMsg.id;
 
   if (fallen) {
-    // Le joueur chute sur la case du dessus
-    path[path.length - 1].fallen = true;
-
-    // Animate la chute (dernière case rouge)
     await animateFall(channel, lastResultMsg, path);
-
     iceFallGames.delete(userId);
     await channel.send(`❄️ ${interaction.user} est tombé dans la glace... Partie terminée.`);
     setTimeout(() => sendGameMenu(channel), 3000);
     return;
   } else {
-    // Pas de chute, on avance d'une case
     game.position.row--;
-
-    // Met à jour la grille avec la nouvelle position (case bleue)
     game.grid[game.position.row][game.position.col] = '🟦';
-
-    // Affiche la grille
     await lastResultMsg.edit({ content: gridToString(game.grid) });
     await channel.send(`${interaction.user} avance d'une case, continue à choisir la colonne ${game.position.col + 1}.`);
-
-    // Sauvegarde partie et attend nouveau clic utilisateur
   }
 }
 
@@ -245,10 +218,29 @@ client.on(Events.InteractionCreate, async interaction => {
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('pfc_Pierre').setLabel('Pierre 🪨').setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId('pfc_Feuille').setLabel('Feuille 📄').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('pfc_Ciseaux').setLabel('Ciseaux ✂️').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('pfc_Ciseaux').setLabel('Ciseaux ✂️').setStyle(ButtonStyle.Primary)
     );
     await interaction.update({ content: 'Choisis ta main:', components: [row] });
     return;
   }
 
-  if (interaction.custom
+  if (interaction.customId.startsWith('pfc_')) {
+    const userChoice = interaction.customId.split('_')[1];
+    const result = await playPFC(interaction, userChoice);
+    await interaction.update({ content: result, components: [] });
+    setTimeout(() => sendGameMenu(channel), 5000);
+    return;
+  }
+
+  if (interaction.customId === 'icefall_start') {
+    await startIceFall(interaction);
+    return;
+  }
+
+  if (interaction.customId.startsWith('icefall_col_')) {
+    await handleIceFallMove(interaction);
+    return;
+  }
+});
+
+client.login(TOKEN);
