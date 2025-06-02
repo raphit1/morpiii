@@ -1,238 +1,149 @@
 const { Client, GatewayIntentBits, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, Events } = require('discord.js');
-require('dotenv').config();
+
+const TOKEN = process.env.TOKEN; // Met ton token dans les variables d'env Render
+
+// ID du salon où le bot poste ses messages de jeu
+const GAME_CHANNEL_ID = '1378737038261620806';
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
-  partials: [Partials.Channel]
+  partials: [Partials.Channel],
 });
 
-const GAME_CHANNEL_ID = '1378737038261620806';
+const choices = ['Pierre', 'Feuille', 'Ciseaux'];
 
-let mainMenuMessage = null;
+let lastResultMessageId = null;
 
-async function sendMainMenu(channel) {
-  // Si un ancien message menu existe, delete-le
-  if (mainMenuMessage) {
-    try {
-      await mainMenuMessage.delete();
-    } catch {}
-    mainMenuMessage = null;
-  }
+async function sendGameMenu(channel) {
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('pfc').setLabel('Pierre Feuille Ciseaux').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('icefall').setLabel('Ice Fall').setStyle(ButtonStyle.Danger),
+  );
 
-  const row = new ActionRowBuilder()
-    .addComponents(
-      new ButtonBuilder()
-        .setCustomId('pfc_start')
-        .setLabel('Pierre Feuille Ciseaux')
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId('icefall_start')
-        .setLabel('Ice Fall')
-        .setStyle(ButtonStyle.Success)
-    );
-
-  mainMenuMessage = await channel.send({
-    content: 'Bienvenue ! Choisis un jeu pour commencer :',
+  await channel.send({
+    content: `🎮 Choisis un jeu en cliquant sur un bouton ci-dessous !`,
     components: [row],
   });
 }
 
-// --- PIERRE FEUILLE CISEAUX ---
-function getPfcResult(userChoice) {
-  const choices = ['Pierre', 'Feuille', 'Ciseaux'];
+// Gestion du jeu Pierre Feuille Ciseaux
+async function playPFC(interaction) {
+  const userChoice = interaction.customId.split('_')[1];
+  if (!userChoice) return;
+
+  // Le bot choisit au hasard
   const botChoice = choices[Math.floor(Math.random() * choices.length)];
 
-  if (userChoice === botChoice) return { winner: 'Egalité', botChoice };
-  if (
+  let result = '';
+  if (userChoice === botChoice) result = 'Égalité !';
+  else if (
     (userChoice === 'Pierre' && botChoice === 'Ciseaux') ||
     (userChoice === 'Feuille' && botChoice === 'Pierre') ||
     (userChoice === 'Ciseaux' && botChoice === 'Feuille')
-  ) return { winner: 'Joueur', botChoice };
-  return { winner: 'Bot', botChoice };
+  ) result = 'Tu as gagné ! 🎉';
+  else result = 'Tu as perdu... 😞';
+
+  await interaction.deferUpdate();
+
+  return `🪨 Pierre / 📄 Feuille / ✂️ Ciseaux\nTu as choisi **${userChoice}**\nLe bot a choisi **${botChoice}**\n\n**${result}**`;
 }
 
-// --- ICE FALL ---
-const ICEFALL_MAX_STEPS = 10;
-
-class IceFallGame {
-  constructor(channel, userId) {
-    this.channel = channel;
-    this.userId = userId;
-    this.step = 0;
-    this.active = true;
-  }
-
-  async sendGameMessage() {
-    const row = new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId('icefall_step')
-          .setLabel('Avancer')
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId('icefall_quit')
-          .setLabel('Abandonner')
-          .setStyle(ButtonStyle.Danger)
-      );
-
-    const progress = '🧊'.repeat(this.step) + '❄️'.repeat(ICEFALL_MAX_STEPS - this.step);
-    this.gameMessage = await this.channel.send({
-      content: `Ice Fall - Progression:\n${progress}\nClique sur **Avancer** pour continuer ou **Abandonner** pour arrêter.`,
-      components: [row],
-    });
-  }
-
-  async advance(interaction) {
-    if (!this.active) return;
-    this.step++;
-    // 1 chance sur 6 de tomber
-    const fall = Math.random() < 1 / 6;
-
-    if (fall) {
-      this.active = false;
-      await interaction.update({
-        content: `💥 Tu es tombé à la glace ! Partie terminée après ${this.step} pas.`,
-        components: [],
-      });
-      await this.endGame();
-      return;
-    }
-
-    if (this.step >= ICEFALL_MAX_STEPS) {
-      this.active = false;
-      await interaction.update({
-        content: `🎉 Bravo, tu as atteint la fin sans tomber ! Partie terminée.`,
-        components: [],
-      });
-      await this.endGame();
-      return;
-    }
-
-    // Update le message avec la progression
-    const progress = '🧊'.repeat(this.step) + '❄️'.repeat(ICEFALL_MAX_STEPS - this.step);
-    await interaction.update({
-      content: `Ice Fall - Progression:\n${progress}\nClique sur **Avancer** pour continuer ou **Abandonner** pour arrêter.`,
-      components: this.gameMessage.components,
-    });
-  }
-
-  async quit(interaction) {
-    this.active = false;
-    await interaction.update({
-      content: 'Tu as abandonné la partie Ice Fall.',
-      components: [],
-    });
-    await this.endGame();
-  }
-
-  async endGame() {
-    // Supprime le message du jeu après un délai court
-    setTimeout(async () => {
-      try {
-        await this.gameMessage.delete();
-      } catch {}
-      sendMainMenu(this.channel);
-    }, 2500);
+// Jeu Ice Fall (1 chance sur 6 de tomber)
+async function playIceFall(interaction) {
+  await interaction.deferUpdate();
+  const chance = Math.floor(Math.random() * 6) + 1;
+  if (chance === 1) {
+    return '❄️ Oh non, tu es tombé dans la glace ! Game Over. ❄️';
+  } else {
+    return `✅ Tu avances sans problème (chance ${chance}/6) ! Continue comme ça...`;
   }
 }
 
-const activeIceFallGames = new Map();
-
-client.once('ready', async () => {
+client.once(Events.ClientReady, async () => {
   console.log(`Connecté en tant que ${client.user.tag}`);
 
   const channel = await client.channels.fetch(GAME_CHANNEL_ID);
   if (!channel) {
-    console.error('Le salon de jeu est introuvable !');
-    process.exit(1);
-  }
-  sendMainMenu(channel);
-});
-
-client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isButton()) return;
-  if (interaction.channelId !== GAME_CHANNEL_ID) return;
-
-  // Boutons du menu principal
-  if (interaction.customId === 'pfc_start') {
-    try {
-      await mainMenuMessage.delete();
-      mainMenuMessage = null;
-    } catch {}
-    const row = new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder().setCustomId('pfc_pierre').setLabel('Pierre').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('pfc_feuille').setLabel('Feuille').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('pfc_ciseaux').setLabel('Ciseaux').setStyle(ButtonStyle.Primary)
-      );
-
-    await interaction.reply({
-      content: 'Pierre Feuille Ciseaux ! Choisis ton coup :',
-      components: [row],
-      ephemeral: false,
-    });
+    console.error('Salon introuvable, vérifie GAME_CHANNEL_ID');
     return;
   }
 
-  // Pierre Feuille Ciseaux choix
-  if (['pfc_pierre', 'pfc_feuille', 'pfc_ciseaux'].includes(interaction.customId)) {
-    const userChoice = interaction.customId.split('_')[1];
-    const choicesMap = { pierre: 'Pierre', feuille: 'Feuille', ciseaux: 'Ciseaux' };
-    const choice = choicesMap[userChoice];
-    const result = getPfcResult(choice);
+  // Envoie ou réinitialise le menu de jeu à la mise en route du bot
+  channel.send('🎮 **Bienvenue dans la zone de jeux !**').then(() => {
+    sendGameMenu(channel);
+  });
+});
 
-    await interaction.update({
-      content: `Tu as choisi **${choice}**.\nLe bot a choisi **${result.botChoice}**.\n\n**Résultat : ${result.winner === 'Egalité' ? 'Égalité' : result.winner === 'Joueur' ? 'Tu gagnes ! 🎉' : 'Le bot gagne ! 😢'}**`,
-      components: [],
-    });
+client.on(Events.InteractionCreate, async interaction => {
+  if (!interaction.isButton()) return;
+  if (interaction.channel.id !== GAME_CHANNEL_ID) return;
+
+  const channel = interaction.channel;
+
+  // Supprime l'ancien message résultat s'il existe
+  if (lastResultMessageId) {
+    try {
+      const oldMsg = await channel.messages.fetch(lastResultMessageId);
+      if (oldMsg) await oldMsg.delete();
+    } catch (e) {
+      // Message introuvable, ignore
+    }
+    lastResultMessageId = null;
+  }
+
+  if (interaction.customId === 'pfc') {
+    // Pour PFC on attend le choix du joueur dans un sous-menu
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('pfc_Pierre').setLabel('Pierre 🪨').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('pfc_Feuille').setLabel('Feuille 📄').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('pfc_Ciseaux').setLabel('Ciseaux ✂️').setStyle(ButtonStyle.Primary),
+    );
+
+    // On update le message interaction avec le choix des boutons PFC
+    await interaction.update({ content: 'Choisis ta main:', components: [row] });
+    return;
+  }
+
+  if (interaction.customId.startsWith('pfc_')) {
+    // Joueur a choisi Pierre, Feuille ou Ciseaux
+    const userChoice = interaction.customId.split('_')[1];
+    const resultText = await playPFC({ ...interaction, customId: interaction.customId });
+
+    // Affiche le résultat dans un nouveau message, puis réaffiche le menu de jeu
+    const resultMsg = await channel.send(resultText);
+    lastResultMessageId = resultMsg.id;
+
+    await interaction.update({ content: 'Jeu terminé.', components: [] });
+
+    // Après 5s on remet le menu de jeu
+    setTimeout(async () => {
+      try {
+        await resultMsg.delete();
+      } catch {}
+      sendGameMenu(channel);
+    }, 5000);
+
+    return;
+  }
+
+  if (interaction.customId === 'icefall') {
+    // Joueur lance Ice Fall
+    const resultText = await playIceFall(interaction);
+
+    const resultMsg = await channel.send(resultText);
+    lastResultMessageId = resultMsg.id;
+
+    await interaction.update({ content: 'Jeu terminé.', components: [] });
 
     setTimeout(async () => {
       try {
-        await interaction.message.delete();
+        await resultMsg.delete();
       } catch {}
-      const channel = interaction.channel;
-      sendMainMenu(channel);
-    }, 3000);
-
-    return;
-  }
-
-  // Ice Fall start
-  if (interaction.customId === 'icefall_start') {
-    try {
-      await mainMenuMessage.delete();
-      mainMenuMessage = null;
-    } catch {}
-
-    const newGame = new IceFallGame(interaction.channel, interaction.user.id);
-    activeIceFallGames.set(interaction.user.id, newGame);
-    await newGame.sendGameMessage();
-    await interaction.deferUpdate();
-    return;
-  }
-
-  // Ice Fall avancer
-  if (interaction.customId === 'icefall_step') {
-    const game = activeIceFallGames.get(interaction.user.id);
-    if (!game) {
-      await interaction.reply({ content: "Tu n'as pas de partie Ice Fall en cours.", ephemeral: true });
-      return;
-    }
-    await game.advance(interaction);
-    return;
-  }
-
-  // Ice Fall abandon
-  if (interaction.customId === 'icefall_quit') {
-    const game = activeIceFallGames.get(interaction.user.id);
-    if (!game) {
-      await interaction.reply({ content: "Tu n'as pas de partie Ice Fall en cours.", ephemeral: true });
-      return;
-    }
-    await game.quit(interaction);
-    activeIceFallGames.delete(interaction.user.id);
+      sendGameMenu(channel);
+    }, 5000);
     return;
   }
 });
 
-client.login(process.env.TOKEN);
+client.login(TOKEN);
